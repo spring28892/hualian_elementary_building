@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>花蓮市和吉安鄉國小資料查詢</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>花蓮市和吉安鄉國小資料查詢</h1>
+            <p class="subtitle">教育部統計處資料查詢系統</p>
+        </header>
+
+        <div class="controls">
+            <button id="refreshBtn" class="btn btn-secondary">重新載入資料</button>
+            <button id="downloadBtn" class="btn btn-primary">下載 CSV</button>
+        </div>
+
+        <div id="loading" class="loading" style="display: none;">
+            <p>正在載入資料...</p>
+        </div>
+
+        <div id="error" class="error" style="display: none;">
+            <p id="errorMessage"></p>
+        </div>
+
+        <div id="info" class="info" style="display: none;">
+            <p>資料筆數：<span id="dataCount">0</span></p>
+            <p>最後更新時間：<span id="lastUpdate">-</span></p>
+        </div>
+
+        <div class="table-container">
+            <table id="schoolTable">
+                <thead>
+                    <tr>
+                        <th>鄉鎮市區</th>
+                        <th>學校名稱</th>
+                        <th>班級數</th>
+                        <th>學生數</th>
+                        <th>教師數</th>
+                        <th>校地面積<br>(平方公尺)</th>
+                        <th>校舍面積<br>(平方公尺)</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody">
+                    <tr>
+                        <td colspan="7" class="empty-message">載入中...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 載入資料
+        async function loadData() {
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const info = document.getElementById('info');
+            const tableBody = document.getElementById('tableBody');
+            
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/data');
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayData(result.data);
+                    document.getElementById('dataCount').textContent = result.count;
+                    if (result.timestamp) {
+                        const date = new Date(result.timestamp);
+                        document.getElementById('lastUpdate').textContent = date.toLocaleString('zh-TW');
+                    }
+                    info.style.display = 'block';
+                } else {
+                    showError(result.error || '載入資料失敗');
+                }
+            } catch (err) {
+                showError('網路錯誤：' + err.message);
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        // 顯示資料
+        function displayData(data) {
+            const tableBody = document.getElementById('tableBody');
+            
+            if (!data || data.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="7" class="empty-message">沒有資料</td></tr>';
+                return;
+            }
+            
+            tableBody.innerHTML = data.map(school => `
+                <tr>
+                    <td>${escapeHtml(school['鄉鎮市區'] || '-')}</td>
+                    <td>${escapeHtml(school['學校名稱'] || '-')}</td>
+                    <td>${formatNumber(school['班級數'])}</td>
+                    <td>${formatNumber(school['學生數'])}</td>
+                    <td>${formatNumber(school['教師數'])}</td>
+                    <td>${formatNumber(school['校地面積'])}</td>
+                    <td>${formatNumber(school['校舍面積'])}</td>
+                </tr>
+            `).join('');
+        }
+
+        // 格式化數字
+        function formatNumber(num) {
+            if (num === null || num === undefined) return '-';
+            return num.toLocaleString('zh-TW');
+        }
+
+        // 轉義 HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 顯示錯誤
+        function showError(message) {
+            const error = document.getElementById('error');
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = message;
+            error.style.display = 'block';
+        }
+
+        // 下載 CSV
+        function downloadCSV() {
+            window.location.href = '/download/csv';
+        }
+
+        // 重新載入資料
+        async function refreshData() {
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const info = document.getElementById('info');
+            const tableBody = document.getElementById('tableBody');
+            
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/refresh');
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayData(result.data);
+                    document.getElementById('dataCount').textContent = result.count;
+                    if (result.timestamp) {
+                        const date = new Date(result.timestamp);
+                        document.getElementById('lastUpdate').textContent = date.toLocaleString('zh-TW');
+                    }
+                    info.style.display = 'block';
+                    alert('資料已更新！');
+                } else {
+                    showError(result.error || '更新資料失敗');
+                }
+            } catch (err) {
+                showError('網路錯誤：' + err.message);
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        // 事件監聽
+        document.getElementById('downloadBtn').addEventListener('click', downloadCSV);
+        document.getElementById('refreshBtn').addEventListener('click', refreshData);
+
+        // 頁面載入時自動載入資料
+        window.addEventListener('DOMContentLoaded', loadData);
+    </script>
+</body>
+</html>
+
