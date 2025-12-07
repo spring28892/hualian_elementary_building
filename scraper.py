@@ -157,9 +157,25 @@ class SchoolScraper:
                 return schools
             
             # 選擇縣市（觸發 change 事件以載入鄉鎮選單）
-            await self.page.select_option('select[name="CityName"]', city_code)
+            try:
+                await self.page.wait_for_selector('select[name="CityName"]', timeout=60000, state='visible')
+                await self.page.select_option('select[name="CityName"]', city_code, timeout=60000)
+            except Exception as e:
+                print(f"選擇縣市時發生錯誤: {e}")
+                # 嘗試使用 JavaScript 設定
+                await self.page.evaluate(f'''(cityCode) => {{
+                    const select = document.querySelector('select[name="CityName"]');
+                    if (select) {{
+                        select.value = cityCode;
+                        const event = new Event('change', {{ bubbles: true }});
+                        select.dispatchEvent(event);
+                        return true;
+                    }}
+                    return false;
+                }}''', city_code)
+                await self.page.wait_for_timeout(2000)
             
-            # 觸發 change 事件
+            # 觸發 change 事件（確保事件已觸發）
             await self.page.evaluate('''() => {
                 const select = document.querySelector('select[name="CityName"]');
                 if (select) {
@@ -173,18 +189,63 @@ class SchoolScraper:
             
             # 選擇「全部」或「請選擇」（值為 '0' 或空）
             try:
+                # 等待鄉鎮選單出現
+                await self.page.wait_for_selector('select[name="DistName"]', timeout=60000, state='visible')
+                await self.page.wait_for_timeout(1000)
                 # 嘗試選擇值為 '0' 的選項
-                await self.page.select_option('select[name="DistName"]', '0')
-            except:
+                await self.page.select_option('select[name="DistName"]', '0', timeout=60000)
+            except Exception as e:
+                print(f"選擇鄉鎮選單時發生錯誤: {e}")
                 # 如果失敗，嘗試選擇第一個選項（通常是「請選擇」）
                 try:
                     first_option = await self.page.locator('select[name="DistName"] option').first
-                    await first_option.click()
-                except:
-                    pass
+                    await first_option.click(timeout=60000)
+                except Exception as e2:
+                    print(f"選擇第一個選項也失敗: {e2}")
+                    # 嘗試使用 JavaScript 設定
+                    try:
+                        await self.page.evaluate('''() => {
+                            const select = document.querySelector('select[name="DistName"]');
+                            if (select && select.options.length > 0) {
+                                select.value = select.options[0].value;
+                                const event = new Event('change', { bubbles: true });
+                                select.dispatchEvent(event);
+                                return true;
+                            }
+                            return false;
+                        }''')
+                        await self.page.wait_for_timeout(2000)
+                    except:
+                        pass
             
-            # 選擇學校層級（國小）
-            await self.page.select_option('select[name="lv"]', '1')
+            # 等待學校層級選單出現（增加等待時間和重試邏輯）
+            try:
+                # 先等待元素出現，增加超時時間到 60 秒
+                await self.page.wait_for_selector('select[name="lv"]', timeout=60000, state='visible')
+                # 等待選單完全載入
+                await self.page.wait_for_timeout(2000)
+                
+                # 選擇學校層級（國小），增加超時時間到 60 秒
+                await self.page.select_option('select[name="lv"]', '1', timeout=60000)
+            except Exception as e:
+                print(f"選擇學校層級時發生錯誤: {e}")
+                # 嘗試使用 JavaScript 直接設定值
+                try:
+                    await self.page.evaluate('''() => {
+                        const select = document.querySelector('select[name="lv"]');
+                        if (select) {
+                            select.value = '1';
+                            // 觸發 change 事件
+                            const event = new Event('change', { bubbles: true });
+                            select.dispatchEvent(event);
+                            return true;
+                        }
+                        return false;
+                    }''')
+                    await self.page.wait_for_timeout(2000)
+                    print("使用 JavaScript 設定學校層級成功")
+                except Exception as e2:
+                    print(f"使用 JavaScript 設定學校層級也失敗: {e2}")
             
             # 點擊查詢按鈕（使用更精確的選擇器）
             try:
@@ -289,9 +350,25 @@ class SchoolScraper:
             print(f"找到鄉鎮代碼: {district_code}")
             
             # 選擇鄉鎮
-            await self.page.select_option('select[name="DistName"]', district_code)
-            await self.page.wait_for_timeout(1000)
-            print(f"已選擇鄉鎮: {district}")
+            try:
+                await self.page.wait_for_selector('select[name="DistName"]', timeout=60000, state='visible')
+                await self.page.select_option('select[name="DistName"]', district_code, timeout=60000)
+                await self.page.wait_for_timeout(1000)
+                print(f"已選擇鄉鎮: {district}")
+            except Exception as e:
+                print(f"選擇鄉鎮時發生錯誤: {e}")
+                # 嘗試使用 JavaScript 設定
+                await self.page.evaluate(f'''(districtCode) => {{
+                    const select = document.querySelector('select[name="DistName"]');
+                    if (select) {{
+                        select.value = districtCode;
+                        const event = new Event('change', {{ bubbles: true }});
+                        select.dispatchEvent(event);
+                        return true;
+                    }}
+                    return false;
+                }}''', district_code)
+                await self.page.wait_for_timeout(2000)
             
             # 選擇學校層級（國小）- 使用 radio button
             try:
@@ -303,10 +380,27 @@ class SchoolScraper:
                 print(f"選擇學校層級時發生錯誤: {e}")
                 # 如果找不到 radio button，嘗試使用 select（備用方案）
                 try:
-                    await self.page.select_option('select[name="lv"]', '1')
+                    await self.page.wait_for_selector('select[name="lv"]', timeout=60000, state='visible')
+                    await self.page.select_option('select[name="lv"]', '1', timeout=60000)
                     print("已選擇學校層級: 國小（使用 select）")
-                except:
-                    print("無法選擇學校層級")
+                except Exception as e2:
+                    print(f"使用 select 選擇學校層級也失敗: {e2}")
+                    # 嘗試使用 JavaScript 設定
+                    try:
+                        await self.page.evaluate('''() => {
+                            const select = document.querySelector('select[name="lv"]');
+                            if (select) {
+                                select.value = '1';
+                                const event = new Event('change', { bubbles: true });
+                                select.dispatchEvent(event);
+                                return true;
+                            }
+                            return false;
+                        }''')
+                        await self.page.wait_for_timeout(2000)
+                        print("使用 JavaScript 設定學校層級成功")
+                    except Exception as e3:
+                        print(f"使用 JavaScript 設定學校層級也失敗: {e3}")
             
             # 點擊查詢按鈕（使用更精確的選擇器）
             print("正在點擊查詢按鈕...")
