@@ -1,6 +1,6 @@
 """
-花蓮市和吉安鄉國小資料爬蟲模組
-從教育部統計處網站爬取學校統計資料
+花蓮縣國小資料爬蟲模組
+從教育部統計處網站爬取花蓮縣所有鄉鎮市區的學校統計資料
 使用 Playwright 處理 JavaScript 動態載入內容
 """
 from playwright.async_api import async_playwright, Browser, Page
@@ -1731,25 +1731,47 @@ class SchoolScraper:
     
     async def get_all_schools(self) -> List[Dict[str, Any]]:
         """
-        取得花蓮市和吉安鄉的所有國小資料
+        取得花蓮縣所有鄉鎮市區的國小資料
         
         Returns:
             所有學校的資料列表
         """
         all_schools = []
         
+        # 花蓮縣所有鄉鎮市區列表
+        districts = [
+            '花蓮市', '吉安鄉', '新城鄉', '秀林鄉', '壽豐鄉', 
+            '鳳林鎮', '光復鄉', '豐濱鄉', '瑞穗鄉', '玉里鎮', 
+            '富里鄉', '卓溪鄉', '萬榮鄉'
+        ]
+        
         try:
             # 使用上下文管理器確保瀏覽器正確關閉
             async with self:
-                # 查詢花蓮市
-                print("正在查詢花蓮市...")
-                hualien_city_schools = await self.query_schools('花蓮縣', '花蓮市')
-                all_schools.extend(hualien_city_schools)
-                
-                # 查詢吉安鄉
-                print("正在查詢吉安鄉...")
-                jian_township_schools = await self.query_schools('花蓮縣', '吉安鄉')
-                all_schools.extend(jian_township_schools)
+                # 先嘗試查詢整個花蓮縣（更快速）
+                print("嘗試查詢整個花蓮縣...")
+                try:
+                    county_schools = await self.query_all_schools_in_county('花蓮縣')
+                    if county_schools and len(county_schools) > 0:
+                        print(f"成功查詢整個花蓮縣，取得 {len(county_schools)} 筆資料")
+                        all_schools.extend(county_schools)
+                    else:
+                        raise Exception("查詢整個縣市未取得資料，改用逐一查詢")
+                except Exception as e:
+                    print(f"查詢整個縣市失敗: {str(e)}，改用逐一查詢各鄉鎮...")
+                    # 如果查詢整個縣市失敗，則逐一查詢各鄉鎮
+                    for district in districts:
+                        try:
+                            print(f"正在查詢 {district}...")
+                            district_schools = await self.query_schools('花蓮縣', district)
+                            if district_schools:
+                                all_schools.extend(district_schools)
+                                print(f"  {district}: 取得 {len(district_schools)} 筆資料")
+                            else:
+                                print(f"  {district}: 未取得資料")
+                        except Exception as e:
+                            print(f"  查詢 {district} 時發生錯誤: {str(e)}")
+                            continue
         except Exception as e:
             print(f"取得所有學校資料時發生錯誤: {str(e)}")
             import traceback
@@ -1765,7 +1787,7 @@ class SchoolScraper:
 
 async def scrape_schools() -> List[Dict[str, Any]]:
     """
-    爬取花蓮市和吉安鄉的國小資料（非同步版本）
+    爬取花蓮縣所有鄉鎮市區的國小資料（非同步版本）
     
     Returns:
         學校資料列表

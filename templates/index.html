@@ -3,15 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>花蓮市和吉安鄉國小資料查詢</title>
+    <title>花蓮縣國小資料查詢</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .district-filter {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .district-filter label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: bold;
+            color: #333;
+        }
+        .district-checkboxes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .district-checkbox-item {
+            display: flex;
+            align-items: center;
+            min-width: 120px;
+        }
+        .district-checkbox-item input[type="checkbox"] {
+            margin-right: 5px;
+        }
+        .select-all-controls {
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        .select-all-controls button {
+            margin-right: 10px;
+            padding: 5px 10px;
+            font-size: 14px;
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .select-all-controls button:hover {
+            background-color: #5a6268;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>花蓮市和吉安鄉國小資料查詢</h1>
+            <h1>花蓮縣國小資料查詢</h1>
             <p class="subtitle">教育部統計處資料查詢系統</p>
         </header>
+
+        <div class="district-filter">
+            <label>選擇區域（可多選）：</label>
+            <div class="select-all-controls">
+                <button id="selectAllBtn">全選</button>
+                <button id="deselectAllBtn">取消全選</button>
+            </div>
+            <div class="district-checkboxes" id="districtCheckboxes">
+                <div class="loading">載入區域列表中...</div>
+            </div>
+        </div>
 
         <div class="controls">
             <button id="refreshBtn" class="btn btn-secondary">重新載入資料</button>
@@ -54,6 +110,69 @@
     </div>
 
     <script>
+        let allDistricts = [];
+        let allData = [];
+
+        // 載入區域列表
+        async function loadDistricts() {
+            try {
+                const response = await fetch('/api/districts');
+                const result = await response.json();
+                
+                if (result.success) {
+                    allDistricts = result.districts;
+                    renderDistrictCheckboxes();
+                } else {
+                    console.error('載入區域列表失敗:', result.error);
+                }
+            } catch (err) {
+                console.error('載入區域列表時發生錯誤:', err);
+            }
+        }
+
+        // 渲染區域複選框
+        function renderDistrictCheckboxes() {
+            const container = document.getElementById('districtCheckboxes');
+            container.innerHTML = '';
+            
+            allDistricts.forEach(district => {
+                const item = document.createElement('div');
+                item.className = 'district-checkbox-item';
+                item.innerHTML = `
+                    <input type="checkbox" id="district-${district}" value="${district}" checked>
+                    <label for="district-${district}">${escapeHtml(district)}</label>
+                `;
+                container.appendChild(item);
+            });
+
+            // 為所有複選框添加事件監聽
+            container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+                checkbox.addEventListener('change', filterAndDisplayData);
+            });
+        }
+
+        // 取得選取的區域
+        function getSelectedDistricts() {
+            const checkboxes = document.querySelectorAll('#districtCheckboxes input[type="checkbox"]:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+
+        // 全選
+        document.getElementById('selectAllBtn').addEventListener('click', () => {
+            document.querySelectorAll('#districtCheckboxes input[type="checkbox"]').forEach(cb => {
+                cb.checked = true;
+            });
+            filterAndDisplayData();
+        });
+
+        // 取消全選
+        document.getElementById('deselectAllBtn').addEventListener('click', () => {
+            document.querySelectorAll('#districtCheckboxes input[type="checkbox"]').forEach(cb => {
+                cb.checked = false;
+            });
+            filterAndDisplayData();
+        });
+
         // 載入資料
         async function loadData() {
             const loading = document.getElementById('loading');
@@ -65,11 +184,30 @@
             error.style.display = 'none';
             
             try {
-                const response = await fetch('/api/data');
+                const selectedDistricts = getSelectedDistricts();
+                
+                // 如果沒有選取任何區域，直接顯示空資料
+                if (selectedDistricts.length === 0) {
+                    allData = [];
+                    displayData([]);
+                    document.getElementById('dataCount').textContent = '0';
+                    info.style.display = 'block';
+                    loading.style.display = 'none';
+                    return;
+                }
+                
+                let url = '/api/data';
+                // 如果不是全選，加入過濾參數
+                if (selectedDistricts.length < allDistricts.length) {
+                    url += '?districts=' + encodeURIComponent(selectedDistricts.join(','));
+                }
+                
+                const response = await fetch(url);
                 const result = await response.json();
                 
                 if (result.success) {
-                    displayData(result.data);
+                    allData = result.data;
+                    displayData(allData);
                     document.getElementById('dataCount').textContent = result.count;
                     if (result.timestamp) {
                         const date = new Date(result.timestamp);
@@ -84,6 +222,33 @@
             } finally {
                 loading.style.display = 'none';
             }
+        }
+
+        // 過濾並顯示資料
+        function filterAndDisplayData() {
+            const selectedDistricts = getSelectedDistricts();
+            
+            if (selectedDistricts.length === 0) {
+                // 如果沒有選取任何區域，顯示空資料
+                displayData([]);
+                document.getElementById('dataCount').textContent = '0';
+                return;
+            }
+            
+            // 如果全選，顯示所有資料
+            if (selectedDistricts.length === allDistricts.length) {
+                displayData(allData);
+                document.getElementById('dataCount').textContent = allData.length;
+                return;
+            }
+            
+            // 過濾資料
+            const filteredData = allData.filter(school => 
+                selectedDistricts.includes(school['鄉鎮市區'])
+            );
+            
+            displayData(filteredData);
+            document.getElementById('dataCount').textContent = filteredData.length;
         }
 
         // 顯示資料
@@ -131,7 +296,20 @@
 
         // 下載 CSV
         function downloadCSV() {
-            window.location.href = '/download/csv';
+            const selectedDistricts = getSelectedDistricts();
+            
+            // 如果沒有選取任何區域，顯示提示訊息並阻止下載
+            if (selectedDistricts.length === 0) {
+                alert('請至少選擇一個區域才能下載 CSV 檔案');
+                return;
+            }
+            
+            let url = '/download/csv';
+            // 如果不是全選，加入過濾參數
+            if (selectedDistricts.length < allDistricts.length) {
+                url += '?districts=' + encodeURIComponent(selectedDistricts.join(','));
+            }
+            window.location.href = url;
         }
 
         // 重新載入資料
@@ -145,18 +323,20 @@
             error.style.display = 'none';
             
             try {
-                const response = await fetch('/api/refresh');
+                const response = await fetch('/api/refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
                 const result = await response.json();
                 
                 if (result.success) {
-                    displayData(result.data);
-                    document.getElementById('dataCount').textContent = result.count;
-                    if (result.timestamp) {
-                        const date = new Date(result.timestamp);
-                        document.getElementById('lastUpdate').textContent = date.toLocaleString('zh-TW');
-                    }
-                    info.style.display = 'block';
-                    alert('資料已更新！');
+                    alert(result.message || '資料已開始更新，請稍後重新載入頁面查看最新資料');
+                    // 等待一下後重新載入資料
+                    setTimeout(() => {
+                        loadData();
+                    }, 2000);
                 } else {
                     showError(result.error || '更新資料失敗');
                 }
@@ -171,9 +351,11 @@
         document.getElementById('downloadBtn').addEventListener('click', downloadCSV);
         document.getElementById('refreshBtn').addEventListener('click', refreshData);
 
-        // 頁面載入時自動載入資料
-        window.addEventListener('DOMContentLoaded', loadData);
+        // 頁面載入時先載入區域列表，然後載入資料
+        window.addEventListener('DOMContentLoaded', async () => {
+            await loadDistricts();
+            await loadData();
+        });
     </script>
 </body>
 </html>
-
