@@ -340,10 +340,10 @@ class SchoolScraper:
             
             self.page.on('response', handle_response)
             
-            # 嘗試等待特定的資料元素出現（如果有 GridView 或其他表格）
+                # 嘗試等待特定的資料元素出現（如果有 GridView 或其他表格）
             try:
-                # 等待任何包含學校名稱的元素出現
-                await self.page.wait_for_selector('table tr:has-text("國小"), div:has-text("國小")', timeout=10000)
+                # 等待任何包含學校名稱的元素出現（包括「國小」和「實小」）
+                await self.page.wait_for_selector('table tr:has-text("國小"), div:has-text("國小"), table tr:has-text("實小"), div:has-text("實小")', timeout=10000)
                 print("檢測到包含學校資料的元素")
             except:
                 print("未檢測到明顯的資料表格，繼續解析...")
@@ -365,14 +365,14 @@ class SchoolScraper:
             try:
                 search_div = self.page.locator('div#search').first
                 if await search_div.count() > 0:
-                    # 使用 JavaScript 點擊第一個包含「國小」的元素
+                    # 使用 JavaScript 點擊第一個包含「國小」或「實小」的元素
                     click_result = await self.page.evaluate('''() => {
                         const searchDiv = document.getElementById('search');
                         if (!searchDiv) return {found: false};
                         
                         const allElements = searchDiv.querySelectorAll('*');
                         for (let elem of allElements) {
-                            if (elem.textContent && elem.textContent.includes('國小')) {
+                            if (elem.textContent && (elem.textContent.includes('國小') || elem.textContent.includes('實小'))) {
                                 try {
                                     elem.click();
                                     return {found: true, text: elem.textContent.trim().substring(0, 50)};
@@ -411,10 +411,10 @@ class SchoolScraper:
             schools = await self.parse_school_data(html, district)
             print(f"解析到 {len(schools)} 筆學校資料")
             
-            # 如果解析不到資料，嘗試從頁面中提取所有包含「國小」的文字
+            # 如果解析不到資料，嘗試從頁面中提取所有包含「國小」或「實小」的文字
             if len(schools) == 0:
                 print("嘗試其他方法提取資料...")
-                # 尋找所有包含「國小」的文字節點
+                # 尋找所有包含「國小」或「實小」的文字節點
                 school_names = await self.page.evaluate('''() => {
                     const results = [];
                     const walker = document.createTreeWalker(
@@ -425,13 +425,13 @@ class SchoolScraper:
                     );
                     let node;
                     while (node = walker.nextNode()) {
-                        if (node.textContent.includes('國小') && node.textContent.trim().length < 50) {
+                        if ((node.textContent.includes('國小') || node.textContent.includes('實小')) && node.textContent.trim().length < 50) {
                             results.push(node.textContent.trim());
                         }
                     }
                     return results;
                 }''')
-                print(f"找到 {len(school_names)} 個包含「國小」的文字：{school_names[:10]}")
+                print(f"找到 {len(school_names)} 個包含「國小」或「實小」的文字：{school_names[:10]}")
             
         except Exception as e:
             print(f"查詢 {county} {district} 時發生錯誤: {str(e)}")
@@ -1132,8 +1132,18 @@ class SchoolScraper:
                     text = search_div.get_text()
                     # 解析格式：學校名稱 花蓮縣[鄉鎮市區][類型]
                     # 改進正則表達式以匹配所有鄉鎮（不只是花蓮市）
+                    # 也匹配「國立東華大學附設實小」這樣的學校名稱
                     pattern = r'([^\s]+(?:\s+[^\s]+)*?)\s+花蓮縣([^\[]+)\[([^\]]+)\]'
                     matches = re.findall(pattern, text)
+                    
+                    # 如果沒有匹配到，嘗試更寬鬆的模式
+                    if not matches:
+                        # 嘗試匹配：學校名稱花蓮縣鄉鎮[類型]（沒有空格的情況）
+                        pattern2 = r'([^縣]+?)(花蓮縣)([^\[]+)\[([^\]]+)\]'
+                        matches2 = re.findall(pattern2, text)
+                        if matches2:
+                            # 轉換格式以匹配原有的處理邏輯（排除多餘的「花蓮縣」組）
+                            matches = [(m[0], m[2], m[3]) for m in matches2]
                     
                     print(f"從 div#search 中找到 {len(matches)} 個學校")
                     
@@ -1162,15 +1172,24 @@ class SchoolScraper:
                 # 方法2: 使用 Playwright 直接尋找可點擊的學校連結
                 if not school_elements:
                     # 改進選擇器，優先選擇真正的連結元素，避免選擇 label
+                    # 包括「國小」和「實小」
                     selectors = [
                         'div#search a:has-text("國小")',
+                        'div#search a:has-text("實小")',
                         'div#search *:has-text("國小"):not(label)',
+                        'div#search *:has-text("實小"):not(label)',
                         'a:has-text("國小")',
+                        'a:has-text("實小")',
                         'tr:has-text("國小") a',
+                        'tr:has-text("實小") a',
                         'table a:has-text("國小")',
+                        'table a:has-text("實小")',
                         'td a:has-text("國小")',
+                        'td a:has-text("實小")',
                         'div#search *[onclick*="國小"]',
+                        'div#search *[onclick*="實小"]',
                         'div#search *[onclick]:has-text("國小")',
+                        'div#search *[onclick]:has-text("實小")',
                     ]
                     
                     for selector in selectors:
@@ -1230,8 +1249,8 @@ class SchoolScraper:
                                     let parent = el.parentElement;
                                     if (parent) {
                                         let text = parent.textContent || parent.innerText || '';
-                                        // 尋找包含「國小」的完整學校名稱
-                                        let match = text.match(/([^\s]+(?:\s+[^\s]+)*?國小)/);
+                                        // 尋找包含「國小」或「實小」的完整學校名稱
+                                        let match = text.match(/([^\s]+(?:\s+[^\s]+)*?(?:國小|實小))/);
                                         if (match) return match[1];
                                     }
                                     return el.textContent || el.innerText || '';
@@ -1242,8 +1261,8 @@ class SchoolScraper:
                             except:
                                 pass
                         
-                        # 只保留有效的學校名稱（至少包含「國小」）
-                        if '國小' in school_name and school_name not in unique_schools:
+                        # 只保留有效的學校名稱（至少包含「國小」或「實小」）
+                        if ('國小' in school_name or '實小' in school_name) and school_name not in unique_schools:
                             unique_schools[school_name] = elem
                 except Exception as e:
                     print(f"  提取學校名稱時發生錯誤: {e}")
@@ -1366,9 +1385,16 @@ class SchoolScraper:
             text = search_div.get_text()
             # 格式似乎是：學校名稱 縣市鄉鎮[類型]學校名稱 縣市鄉鎮[類型]...
             # 使用正則表達式解析
-            # 模式：學校名稱（可能包含空格） 縣市 鄉鎮[類型]
+            # 模式：學校名稱（可能包含空格，包括「附設實小」等） 縣市 鄉鎮[類型]
+            # 改進正則表達式以匹配「國立東華大學附設實小」這樣的學校名稱
             pattern = r'([^\s]+(?:\s+[^\s]+)*?)\s+([^縣市]+縣市?)([^\[]+)\[([^\]]+)\]'
             matches = re.findall(pattern, text)
+            
+            # 如果沒有匹配到，嘗試更寬鬆的模式（可能學校名稱中沒有空格）
+            if not matches:
+                # 嘗試匹配：學校名稱花蓮縣鄉鎮[類型]（沒有空格的情況）
+                pattern2 = r'([^縣]+?)(花蓮縣)([^\[]+)\[([^\]]+)\]'
+                matches = re.findall(pattern2, text)
             
             for match in matches:
                 school_name = match[0].strip()
@@ -1517,10 +1543,10 @@ class SchoolScraper:
                             schools.append(school_data)
                     else:
                         # 如果沒有標題行，使用原有的邏輯
-                        # 嘗試識別學校名稱（通常是第一個非空欄位，或包含「國小」的欄位）
+                        # 嘗試識別學校名稱（通常是第一個非空欄位，或包含「國小」或「實小」的欄位）
                         school_name = ''
                         for text in cell_texts:
-                            if '國小' in text or ('學校' in text and len(text) < 50):
+                            if '國小' in text or '實小' in text or ('學校' in text and len(text) < 50):
                                 school_name = text
                                 break
                         if not school_name and cell_texts[0]:
@@ -1601,6 +1627,108 @@ class SchoolScraper:
         except ValueError:
             return None
     
+    def normalize_school_name(self, school_name: str) -> str:
+        """
+        標準化學校名稱，提取核心部分（去掉縣市鄉鎮和類型標記）
+        
+        Args:
+            school_name: 原始學校名稱（可能包含「花蓮縣花蓮市[縣市立]」等後綴）
+        
+        Returns:
+            標準化後的學校名稱（核心部分）
+        """
+        if not school_name:
+            return ''
+        
+        # 移除常見的後綴模式：
+        # - 「花蓮縣花蓮市[縣市立]」
+        # - 「花蓮縣吉安鄉[縣市立]」
+        # - 「花蓮縣[鄉鎮市區][類型]」
+        # 模式：學校名稱 花蓮縣[鄉鎮市區][類型]
+        pattern = r'^(.+?)\s+花蓮縣[^\[]+\[[^\]]+\])$'
+        match = re.match(pattern, school_name)
+        if match:
+            # 提取核心學校名稱
+            return match.group(1).strip()
+        
+        # 如果沒有匹配，返回原始名稱（可能已經是核心名稱）
+        return school_name.strip()
+    
+    def merge_school_data(self, schools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        合併重複的學校資料
+        
+        如果同一個學校出現多次（例如「私立海星國小」和「私立海星國小 花蓮縣花蓮市[私立]」），
+        合併它們的資料，保留有詳細資料的版本。
+        
+        Args:
+            schools: 學校資料列表
+        
+        Returns:
+            合併後的學校資料列表
+        """
+        # 使用標準化後的學校名稱作為鍵
+        merged_schools = {}
+        
+        for school in schools:
+            school_name = school.get('學校名稱', '')
+            if not school_name:
+                continue
+            
+            # 標準化學校名稱
+            normalized_name = self.normalize_school_name(school_name)
+            
+            # 檢查是否已有這個學校
+            if normalized_name in merged_schools:
+                existing_school = merged_schools[normalized_name]
+                
+                # 檢查哪個版本有更多詳細資料
+                existing_has_data = any([
+                    existing_school.get('班級數'),
+                    existing_school.get('學生數'),
+                    existing_school.get('教師數'),
+                    existing_school.get('校地面積'),
+                    existing_school.get('校舍面積'),
+                ])
+                
+                current_has_data = any([
+                    school.get('班級數'),
+                    school.get('學生數'),
+                    school.get('教師數'),
+                    school.get('校地面積'),
+                    school.get('校舍面積'),
+                ])
+                
+                # 如果當前版本有資料而現有版本沒有，或當前版本資料更完整，則替換
+                if current_has_data and not existing_has_data:
+                    # 使用當前版本，但保留標準化的名稱
+                    school['學校名稱'] = normalized_name
+                    merged_schools[normalized_name] = school
+                elif current_has_data and existing_has_data:
+                    # 兩個版本都有資料，合併資料（優先使用非 None 的值）
+                    for field in ['班級數', '學生數', '教師數', '校地面積', '校舍面積']:
+                        if existing_school.get(field) is None and school.get(field) is not None:
+                            existing_school[field] = school.get(field)
+                    # 確保使用標準化的名稱
+                    existing_school['學校名稱'] = normalized_name
+                elif not current_has_data and existing_has_data:
+                    # 現有版本有資料，保持不變
+                    existing_school['學校名稱'] = normalized_name
+                else:
+                    # 兩個版本都沒有資料，使用較完整的學校名稱（保留原始完整名稱）
+                    if len(school_name) > len(existing_school.get('學校名稱', '')):
+                        school['學校名稱'] = normalized_name
+                        merged_schools[normalized_name] = school
+                    else:
+                        existing_school['學校名稱'] = normalized_name
+            else:
+                # 新學校，加入字典
+                # 使用標準化的名稱
+                school['學校名稱'] = normalized_name
+                merged_schools[normalized_name] = school
+        
+        return list(merged_schools.values())
+    
     async def get_all_schools(self) -> List[Dict[str, Any]]:
         """
         取得花蓮市和吉安鄉的所有國小資料
@@ -1626,6 +1754,11 @@ class SchoolScraper:
             print(f"取得所有學校資料時發生錯誤: {str(e)}")
             import traceback
             traceback.print_exc()
+        
+        # 合併重複的學校資料
+        print(f"合併前共有 {len(all_schools)} 筆學校資料")
+        all_schools = self.merge_school_data(all_schools)
+        print(f"合併後共有 {len(all_schools)} 筆學校資料")
         
         return all_schools
 
