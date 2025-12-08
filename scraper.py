@@ -1739,7 +1739,7 @@ class SchoolScraper:
         # - 「花蓮縣吉安鄉[縣市立]」
         # - 「花蓮縣[鄉鎮市區][類型]」
         # 模式：學校名稱 花蓮縣[鄉鎮市區][類型]
-        pattern = r'^(.+?)\s+花蓮縣[^\[]+\[[^\]]+\])$'
+        pattern = r'^(.+?)\s+花蓮縣[^\[]+\[[^\]]+\]$'
         match = re.match(pattern, school_name)
         if match:
             # 提取核心學校名稱
