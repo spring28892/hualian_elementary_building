@@ -218,34 +218,50 @@ class SchoolScraper:
                     except:
                         pass
             
-            # 等待學校層級選單出現（增加等待時間和重試邏輯）
+            # 選擇學校層級（國小）- 優先使用 radio button，如果失敗再使用 select
             try:
-                # 先等待元素出現，增加超時時間到 60 秒
-                await self.page.wait_for_selector('select[name="lv"]', timeout=60000, state='visible')
-                # 等待選單完全載入
-                await self.page.wait_for_timeout(2000)
-                
-                # 選擇學校層級（國小），增加超時時間到 60 秒
-                await self.page.select_option('select[name="lv"]', '1', timeout=60000)
+                # 先嘗試點擊「國小」的 radio button（更常見的方式）
+                await self.page.click('input[type="radio"][value="國小"]', timeout=10000)
+                await self.page.wait_for_timeout(1000)  # 等待事件觸發
+                print("已選擇學校層級: 國小（使用 radio button）")
             except Exception as e:
-                print(f"選擇學校層級時發生錯誤: {e}")
-                # 嘗試使用 JavaScript 直接設定值
+                print(f"使用 radio button 選擇學校層級失敗: {e}，嘗試使用 select...")
+                # 如果找不到 radio button，嘗試使用 select（備用方案）
                 try:
-                    await self.page.evaluate('''() => {
-                        const select = document.querySelector('select[name="lv"]');
-                        if (select) {
-                            select.value = '1';
-                            // 觸發 change 事件
-                            const event = new Event('change', { bubbles: true });
-                            select.dispatchEvent(event);
-                            return true;
-                        }
-                        return false;
-                    }''')
-                    await self.page.wait_for_timeout(2000)
-                    print("使用 JavaScript 設定學校層級成功")
+                    # 等待 select 元素出現
+                    await self.page.wait_for_selector('select[name="lv"]', timeout=30000, state='visible')
+                    await self.page.wait_for_timeout(1000)
+                    # 選擇學校層級（國小）
+                    await self.page.select_option('select[name="lv"]', '1', timeout=30000)
+                    print("已選擇學校層級: 國小（使用 select）")
                 except Exception as e2:
-                    print(f"使用 JavaScript 設定學校層級也失敗: {e2}")
+                    print(f"使用 select 選擇學校層級也失敗: {e2}，嘗試使用 JavaScript...")
+                    # 嘗試使用 JavaScript 直接設定值
+                    try:
+                        result = await self.page.evaluate('''() => {
+                            // 先嘗試 radio button
+                            const radio = document.querySelector('input[type="radio"][value="國小"]');
+                            if (radio) {
+                                radio.click();
+                                return {success: true, method: 'radio'};
+                            }
+                            // 再嘗試 select
+                            const select = document.querySelector('select[name="lv"]');
+                            if (select) {
+                                select.value = '1';
+                                const event = new Event('change', { bubbles: true });
+                                select.dispatchEvent(event);
+                                return {success: true, method: 'select'};
+                            }
+                            return {success: false};
+                        }''')
+                        await self.page.wait_for_timeout(2000)
+                        if result.get('success'):
+                            print(f"使用 JavaScript 設定學校層級成功（方法: {result.get('method')}）")
+                        else:
+                            print("警告：無法設定學校層級，繼續執行...")
+                    except Exception as e3:
+                        print(f"使用 JavaScript 設定學校層級也失敗: {e3}，繼續執行...")
             
             # 點擊查詢按鈕（使用更精確的選擇器）
             try:
@@ -256,13 +272,22 @@ class SchoolScraper:
             
             # 等待結果載入
             await self.page.wait_for_load_state('networkidle', timeout=30000)
-            await self.page.wait_for_timeout(3000)  # 等待表格渲染
+            await self.page.wait_for_timeout(5000)  # 等待表格渲染和資料載入
             
-            # 取得頁面 HTML
+            # 首先嘗試使用新方法取得詳細資料（點擊每個學校連結）
+            print("\n嘗試使用新方法取得詳細資料（點擊學校連結）...")
+            schools = await self.parse_school_data_with_details(None)
+            
+            # 如果新方法成功取得資料，返回結果
+            if schools and any(s.get('班級數') or s.get('學生數') or s.get('教師數') for s in schools):
+                print(f"成功使用新方法取得 {len(schools)} 筆包含詳細資料的學校資料")
+                return schools
+            
+            # 如果新方法失敗或沒有取得詳細資料，使用原有的解析方法
+            print("\n新方法未取得詳細資料，使用基本解析方法...")
             html = await self.page.content()
-            
-            # 解析結果
             schools = await self.parse_school_data_with_district(html)
+            print(f"解析到 {len(schools)} 筆學校資料")
             
         except Exception as e:
             print(f"查詢 {county} 時發生錯誤: {str(e)}")
