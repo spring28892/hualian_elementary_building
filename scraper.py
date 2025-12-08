@@ -919,6 +919,13 @@ class SchoolScraper:
                                         print(f"    找到校舍面積: {num} (表格{table_idx}, 行{row_idx+2}, 欄2)")
                                 break
             
+            # 輸出解析結果總結
+            found_fields = [k for k, v in detail_data.items() if v is not None]
+            if found_fields:
+                print(f"    已解析欄位: {', '.join(found_fields)}")
+            else:
+                print(f"    警告：未從表格中解析到任何資料")
+            
             # 方法2: 使用正則表達式從文字中提取（改進版）
             if not any(detail_data.values()):
                 # 更靈活的正則表達式模式
@@ -992,27 +999,90 @@ class SchoolScraper:
                         if num and detail_data['校舍面積'] is None:
                             detail_data['校舍面積'] = self.parse_number(num.group(1))
             
+            # 輸出最終解析結果總結
+            final_found_fields = [k for k, v in detail_data.items() if v is not None]
+            if final_found_fields:
+                print(f"    最終解析結果: {', '.join([f'{k}={v}' for k, v in detail_data.items() if v is not None])}")
+            else:
+                print(f"    警告：最終未解析到任何詳細資料")
+            
             # 如果是新分頁，關閉它；如果是同一頁面，返回原頁面
             if detail_page and detail_page != self.page:
                 # 是新分頁，關閉它
+                print(f"    關閉詳細資料視窗...")
                 await detail_page.close()
-                # 切換回原頁面（如果需要）
-                if self.page.url != original_url:
-                    await self.page.bring_to_front()
+                # 切換回原頁面（確保焦點在原頁面）
+                await self.page.bring_to_front()
+                await self.page.wait_for_timeout(1000)
+                
+                # 嘗試關閉可能打開的彈出視窗（如果有）
+                try:
+                    # 尋找關閉按鈕（常見的彈出視窗關閉按鈕）
+                    close_selectors = [
+                        'button.close',
+                        '.modal .close',
+                        '[aria-label*="關閉"]',
+                        '[aria-label*="close"]',
+                        'button:has-text("關閉")',
+                        'button:has-text("×")',
+                    ]
+                    for selector in close_selectors:
+                        try:
+                            close_btn = self.page.locator(selector).first
+                            if await close_btn.count() > 0 and await close_btn.is_visible():
+                                await close_btn.click()
+                                await self.page.wait_for_timeout(500)
+                                print(f"    已關閉彈出視窗")
+                                break
+                        except:
+                            continue
+                except:
+                    pass
             elif original_url and self.page.url != original_url:
                 # 如果是同一頁面但 URL 改變了，返回原頁面
+                print(f"    返回原始搜尋結果頁面...")
                 await self.page.goto(original_url, wait_until='networkidle', timeout=30000)
                 await self.page.wait_for_timeout(2000)
             
+            print(f"    詳細資料取得完成")
+            
         except asyncio.TimeoutError:
             print(f"  取得詳細資料超時（可能連結不是有效的詳細頁面）")
+            # 嘗試清理頁面狀態
+            try:
+                if detail_page and detail_page != self.page:
+                    await detail_page.close()
+                    await self.page.bring_to_front()
+                    await self.page.wait_for_timeout(1000)
+            except:
+                pass
         except Exception as e:
             print(f"  取得學校詳細資料時發生錯誤: {str(e)}")
+            import traceback
+            traceback.print_exc()
             # 嘗試返回原頁面
             try:
-                if original_url and self.page.url != original_url:
+                if detail_page and detail_page != self.page:
+                    await detail_page.close()
+                    await self.page.bring_to_front()
+                    await self.page.wait_for_timeout(1000)
+                elif original_url and self.page.url != original_url:
                     await self.page.goto(original_url, wait_until='networkidle', timeout=30000)
                     await self.page.wait_for_timeout(2000)
+            except:
+                pass
+        finally:
+            # 確保頁面狀態正確（嘗試關閉所有彈出視窗）
+            try:
+                # 檢查是否有打開的新分頁需要關閉
+                if self.page:
+                    pages = self.page.context.pages
+                    if len(pages) > 1:
+                        # 關閉除主頁面外的所有分頁
+                        for p in pages:
+                            if p != self.page and not p.is_closed():
+                                await p.close()
+                        await self.page.bring_to_front()
             except:
                 pass
         
@@ -1191,16 +1261,44 @@ class SchoolScraper:
                                 detail_data[key] = self.parse_number(match.group(1))
                                 break
             
+            # 輸出最終解析結果總結
+            final_found_fields = [k for k, v in detail_data.items() if v is not None]
+            if final_found_fields:
+                print(f"    最終解析結果: {', '.join([f'{k}={v}' for k, v in detail_data.items() if v is not None])}")
+            else:
+                print(f"    警告：最終未解析到任何詳細資料")
+            
             # 關閉詳細頁面（如果是新分頁）
             if detail_page != self.page:
+                print(f"    關閉詳細資料視窗...")
                 await detail_page.close()
+                await self.page.bring_to_front()
+                await self.page.wait_for_timeout(1000)
+            
+            print(f"    詳細資料取得完成")
                 
         except asyncio.TimeoutError:
             print(f"    取得詳細資料超時")
+            # 嘗試清理頁面狀態
+            try:
+                if detail_page != self.page:
+                    await detail_page.close()
+                    await self.page.bring_to_front()
+                    await self.page.wait_for_timeout(1000)
+            except:
+                pass
         except Exception as e:
             print(f"    取得詳細資料時發生錯誤: {str(e)}")
             import traceback
             traceback.print_exc()
+            # 嘗試清理頁面狀態
+            try:
+                if detail_page != self.page:
+                    await detail_page.close()
+                    await self.page.bring_to_front()
+                    await self.page.wait_for_timeout(1000)
+            except:
+                pass
         
         return detail_data
     
@@ -1388,6 +1486,7 @@ class SchoolScraper:
                     continue
             
             print(f"去重後共有 {len(unique_schools)} 個學校")
+            print(f"開始逐一處理學校詳細資料...\n")
             
             # 為每個學校取得詳細資料
             for i, (school_name, elem) in enumerate(unique_schools.items(), 1):
@@ -1458,9 +1557,15 @@ class SchoolScraper:
                                 detail_data = await self.get_school_detail(elem)
                             
                             school_data.update(detail_data)
-                            print(f"  成功取得詳細資料: 班級數={detail_data.get('班級數')}, 學生數={detail_data.get('學生數')}, 教師數={detail_data.get('教師數')}")
+                            
+                            # 統計成功取得的欄位
+                            success_fields = [k for k, v in detail_data.items() if v is not None]
+                            if success_fields:
+                                print(f"  ✓ 成功取得詳細資料: {len(success_fields)} 個欄位 ({', '.join(success_fields)})")
+                            else:
+                                print(f"  ⚠ 未取得任何詳細資料")
                         except Exception as e:
-                            print(f"  取得詳細資料失敗: {str(e)}")
+                            print(f"  ✗ 取得詳細資料失敗: {str(e)}")
                             import traceback
                             traceback.print_exc()
                     
@@ -1468,14 +1573,51 @@ class SchoolScraper:
                     if not existing_school:
                         schools.append(school_data)
                     
-                    # 在處理下一個學校前，等待一下
+                    print(f"  完成處理: {school_name}")
+                    
+                    # 在處理下一個學校前，等待一下並確保頁面狀態正確
                     await self.page.wait_for_timeout(1500)
                     
+                    # 確保我們還在搜尋結果頁面（不是在其他頁面）
+                    try:
+                        # 檢查是否有彈出視窗需要關閉
+                        close_selectors = [
+                            'button.close',
+                            '.modal .close',
+                            '[aria-label*="關閉"]',
+                            'button:has-text("×")',
+                        ]
+                        for selector in close_selectors:
+                            try:
+                                close_btn = self.page.locator(selector).first
+                                if await close_btn.count() > 0 and await close_btn.is_visible():
+                                    await close_btn.click()
+                                    await self.page.wait_for_timeout(500)
+                                    break
+                            except:
+                                continue
+                    except:
+                        pass
+                    
                 except Exception as e:
-                    print(f"處理學校 {school_name} 時發生錯誤: {str(e)}")
+                    print(f"  ✗ 處理學校 {school_name} 時發生錯誤: {str(e)}")
                     import traceback
                     traceback.print_exc()
+                    # 確保頁面狀態正確，以便繼續處理下一個學校
+                    try:
+                        # 關閉可能打開的新分頁
+                        pages = self.page.context.pages
+                        if len(pages) > 1:
+                            for p in pages:
+                                if p != self.page and not p.is_closed():
+                                    await p.close()
+                            await self.page.bring_to_front()
+                            await self.page.wait_for_timeout(1000)
+                    except:
+                        pass
                     continue
+            
+            print(f"\n所有學校處理完成！共處理 {len(unique_schools)} 個學校，成功取得 {len([s for s in schools if any([s.get('班級數'), s.get('學生數'), s.get('教師數')])])} 個學校的詳細資料")
             
         except Exception as e:
             print(f"解析學校資料時發生錯誤: {str(e)}")
