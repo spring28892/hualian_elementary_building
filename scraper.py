@@ -129,8 +129,8 @@ class SchoolScraper:
             if not self.page:
                 await self.start()
             
-            # 第一步：載入初始頁面
-            await self.page.goto(self.BASE_URL, wait_until='networkidle', timeout=30000)
+            # 第一步：載入初始頁面（帶重試機制）
+            await self._goto_with_retry(self.BASE_URL)
             
             # 等待頁面完全載入
             await self.page.wait_for_load_state('domcontentloaded')
@@ -296,6 +296,36 @@ class SchoolScraper:
         
         return schools
     
+    async def _goto_with_retry(self, url: str, max_retries: int = 3, retry_delay: int = 5) -> bool:
+        """
+        帶重試機制的頁面載入方法
+        
+        Args:
+            url: 要載入的 URL
+            max_retries: 最大重試次數
+            retry_delay: 重試間隔（秒）
+        
+        Returns:
+            True 如果成功載入，失敗時拋出異常
+        """
+        for attempt in range(max_retries):
+            try:
+                await self.page.goto(url, wait_until='networkidle', timeout=30000)
+                return True
+            except Exception as e:
+                error_msg = str(e)
+                if 'ERR_NAME_NOT_RESOLVED' in error_msg or 'net::' in error_msg:
+                    if attempt < max_retries - 1:
+                        print(f"網路連線錯誤（嘗試 {attempt + 1}/{max_retries}）: {error_msg}，{retry_delay} 秒後重試...")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    else:
+                        print(f"網路連線失敗，已重試 {max_retries} 次: {error_msg}")
+                        raise
+                else:
+                    # 其他錯誤直接拋出
+                    raise
+    
     async def query_schools(self, county: str, district: str) -> List[Dict[str, Any]]:
         """
         查詢指定縣市和鄉鎮的國小資料
@@ -314,8 +344,8 @@ class SchoolScraper:
             if not self.page:
                 await self.start()
             
-            # 載入初始頁面
-            await self.page.goto(self.BASE_URL, wait_until='networkidle', timeout=30000)
+            # 載入初始頁面（帶重試機制）
+            await self._goto_with_retry(self.BASE_URL)
             
             # 等待頁面完全載入
             await self.page.wait_for_load_state('domcontentloaded')
@@ -2020,6 +2050,33 @@ class SchoolScraper:
                         raise Exception("查詢整個縣市未取得資料，改用逐一查詢")
                 except Exception as e:
                     print(f"查詢整個縣市失敗: {str(e)}，改用逐一查詢各鄉鎮...")
+                    # 如果查詢整個縣市失敗，確保頁面狀態正確
+                    # 檢查頁面是否仍然有效，如果無效則重新載入
+                    try:
+                        # 檢查頁面是否已關閉或無效
+                        if self.page.is_closed():
+                            print("頁面已關閉，重新啟動瀏覽器...")
+                            await self.close()
+                            await self.start()
+                        else:
+                            # 嘗試重新載入頁面以確保狀態正確
+                            try:
+                                current_url = self.page.url
+                                if not current_url or 'edugissys' not in current_url:
+                                    print("頁面 URL 不正確，重新載入...")
+                                    await self._goto_with_retry(self.BASE_URL)
+                            except:
+                                # 如果無法取得 URL，重新載入頁面
+                                print("無法取得頁面狀態，重新載入...")
+                                await self._goto_with_retry(self.BASE_URL)
+                    except Exception as reset_error:
+                        print(f"重置頁面狀態時發生錯誤: {str(reset_error)}，嘗試重新啟動瀏覽器...")
+                        try:
+                            await self.close()
+                            await self.start()
+                        except:
+                            pass
+                    
                     # 如果查詢整個縣市失敗，則逐一查詢各鄉鎮
                     for district in districts:
                         try:
@@ -2031,7 +2088,12 @@ class SchoolScraper:
                             else:
                                 print(f"  {district}: 未取得資料")
                         except Exception as e:
-                            print(f"  查詢 {district} 時發生錯誤: {str(e)}")
+                            error_msg = str(e)
+                            if 'ERR_NAME_NOT_RESOLVED' in error_msg or 'net::' in error_msg:
+                                print(f"  查詢 {district} 時發生網路錯誤: {error_msg}")
+                                print(f"  跳過 {district}，繼續處理下一個鄉鎮...")
+                            else:
+                                print(f"  查詢 {district} 時發生錯誤: {error_msg}")
                             continue
         except Exception as e:
             print(f"取得所有學校資料時發生錯誤: {str(e)}")
