@@ -36,6 +36,8 @@ db = Database()
 # 定時任務排程器
 scheduler = BackgroundScheduler()
 
+# Flag to control startup scraping/scheduler; default off to avoid blocking web workers
+ENABLE_STARTUP_SCRAPE = os.getenv("ENABLE_STARTUP_SCRAPE", "0") == "1"
 
 def run_scrape_task():
     """
@@ -246,8 +248,8 @@ def download_csv():
         df = pd.DataFrame(data)
         
         # 確保欄位順序
-        columns_order = ['鄉鎮市區', '學校名稱', '班級數', '學生數', '教師數', 
-                        '校地面積', '校舍面積']
+        columns_order = ['鄉鎮市區', '學校名稱', '班級數', '學生數', '教師數',
+                        '校地面積', '校舍面積', '學校類型']
         # 只包含存在的欄位
         columns_order = [col for col in columns_order if col in df.columns]
         df = df[columns_order]
@@ -411,23 +413,27 @@ def init_scheduler():
             return False
 
 
-# 應用程式啟動時檢查並執行爬取
+
+# Entry point / WSGI setup
+def _start_scheduler_and_scrape():
+    if ENABLE_STARTUP_SCRAPE:
+        scheduler.start()
+        atexit.register(lambda: scheduler.shutdown())
+        check_and_scrape_on_startup()
+    else:
+        print("Startup scrape disabled (ENABLE_STARTUP_SCRAPE=0)")
+
 if __name__ == '__main__':
-    # 初始化排程器（單進程模式，總是啟動）
-    scheduler.start()
-    atexit.register(lambda: scheduler.shutdown())
-    
-    # 檢查並執行爬取
-    check_and_scrape_on_startup()
-    
+    _start_scheduler_and_scrape()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
 else:
-    # 如果是使用 gunicorn 等 WSGI 伺服器，使用文件鎖保護
-    scheduler_initialized = init_scheduler()
-    
-    # 只有成功初始化排程器的進程才執行啟動檢查
-    if scheduler_initialized:
-        check_and_scrape_on_startup()
+    # In WSGI workers, default to not starting scheduler unless explicitly enabled
+    if ENABLE_STARTUP_SCRAPE:
+        scheduler_initialized = init_scheduler()
+        if scheduler_initialized:
+            check_and_scrape_on_startup()
+        else:
+            print("跳過啟動檢查（排程器由其他進程管理）")
     else:
-        print("跳過啟動檢查（排程器由其他進程管理）")
+        print("Startup scrape disabled (ENABLE_STARTUP_SCRAPE=0)")
