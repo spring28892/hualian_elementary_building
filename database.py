@@ -43,10 +43,16 @@ class Database:
         cursor = conn.cursor()
 
         if self.use_postgres:
+            # Pre-create sequence to avoid duplicate-name errors when table is recreated
+            cursor.execute(
+                """
+                CREATE SEQUENCE IF NOT EXISTS schools_id_seq AS INTEGER;
+                """
+            )
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schools (
-                    id SERIAL PRIMARY KEY,
+                    id INTEGER PRIMARY KEY DEFAULT nextval('schools_id_seq'),
                     "鄉鎮市區" TEXT NOT NULL,
                     "學校名稱" TEXT NOT NULL,
                     "班級數" INTEGER,
@@ -59,6 +65,11 @@ class Database:
                     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE("鄉鎮市區", "學校名稱")
                 )
+                """
+            )
+            cursor.execute(
+                """
+                ALTER SEQUENCE schools_id_seq OWNED BY schools.id;
                 """
             )
             cursor.execute(
