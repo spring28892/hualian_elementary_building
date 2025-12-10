@@ -7,7 +7,7 @@ from playwright.async_api import async_playwright, Browser, Page
 from bs4 import BeautifulSoup
 import re
 import asyncio
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Callable
 
 
 class SchoolScraper:
@@ -112,12 +112,14 @@ class SchoolScraper:
             print(f"取得鄉鎮代碼時發生錯誤: {str(e)}")
             return None
     
-    async def query_all_schools_in_county(self, county: str) -> List[Dict[str, Any]]:
+    async def query_all_schools_in_county(self, county: str, 
+                                         on_school_scraped: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
         """
         查詢指定縣市的所有國小資料（不指定鄉鎮）
         
         Args:
             county: 縣市名稱（例如：花蓮縣）
+            on_school_scraped: 可選的回調函數，每處理完一間學校時調用
         
         Returns:
             學校資料列表
@@ -276,18 +278,18 @@ class SchoolScraper:
             
             # 首先嘗試使用新方法取得詳細資料（點擊每個學校連結）
             print("\n嘗試使用新方法取得詳細資料（點擊學校連結）...")
-            schools = await self.parse_school_data_with_details(None)
+            schools = await self.parse_school_data_with_details(None, on_school_scraped=on_school_scraped)
             
             # 如果新方法成功取得資料，返回結果
+            # 注意：回調已經在 parse_school_data_with_details 內部處理，不需要重複觸發
             if schools and any(s.get('班級數') or s.get('學生數') or s.get('教師數') for s in schools):
                 print(f"成功使用新方法取得 {len(schools)} 筆包含詳細資料的學校資料")
                 return schools
             
-            # 如果新方法失敗或沒有取得詳細資料，使用原有的解析方法
-            print("\n新方法未取得詳細資料，使用基本解析方法...")
-            html = await self.page.content()
-            schools = await self.parse_school_data_with_district(html)
-            print(f"解析到 {len(schools)} 筆學校資料")
+            # 如果新方法失敗或沒有取得詳細資料，不需要再次解析
+            # parse_school_data_with_details 內部已處理過並觸發 callback
+            # 直接返回已解析的學校資料
+            print(f"新方法完成，共解析到 {len(schools)} 筆學校資料")
             
         except Exception as e:
             print(f"查詢 {county} 時發生錯誤: {str(e)}")
@@ -326,13 +328,15 @@ class SchoolScraper:
                     # 其他錯誤直接拋出
                     raise
     
-    async def query_schools(self, county: str, district: str) -> List[Dict[str, Any]]:
+    async def query_schools(self, county: str, district: str, 
+                           on_school_scraped: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
         """
         查詢指定縣市和鄉鎮的國小資料
         
         Args:
             county: 縣市名稱（例如：花蓮縣）
             district: 鄉鎮市區名稱（例如：花蓮市、吉安鄉）
+            on_school_scraped: 可選的回調函數，每處理完一間學校時調用
         
         Returns:
             學校資料列表
@@ -400,7 +404,7 @@ class SchoolScraper:
             if not district_code:
                 print(f"無法找到鄉鎮代碼: {district}")
                 # 如果找不到特定鄉鎮，嘗試查詢整個縣市再過濾
-                return await self.query_all_schools_in_county(county)
+                return await self.query_all_schools_in_county(county, on_school_scraped=on_school_scraped)
             
             print(f"找到鄉鎮代碼: {district_code}")
             
@@ -548,17 +552,18 @@ class SchoolScraper:
             except Exception as e:
                 print(f"嘗試點擊學校名稱時發生錯誤: {e}")
             
-            schools = await self.parse_school_data_with_details(district)
+            schools = await self.parse_school_data_with_details(district, on_school_scraped=on_school_scraped)
             
             # 如果新方法成功取得資料，返回結果
+            # 注意：回調已經在 parse_school_data_with_details 內部處理，不需要重複觸發
             if schools and any(s.get('班級數') or s.get('學生數') or s.get('教師數') for s in schools):
                 print(f"成功使用新方法取得 {len(schools)} 筆包含詳細資料的學校資料")
                 return schools
             
-            # 如果新方法失敗或沒有取得詳細資料，使用原有的解析方法
-            print("\n新方法未取得詳細資料，使用基本解析方法...")
-            schools = await self.parse_school_data(html, district)
-            print(f"解析到 {len(schools)} 筆學校資料")
+            # 如果新方法失敗或沒有取得詳細資料，不需要再次解析
+            # parse_school_data_with_details 內部已處理過並觸發 callback
+            # 直接返回已解析的學校資料
+            print(f"新方法完成，共解析到 {len(schools)} 筆學校資料")
             
             # 如果解析不到資料，嘗試從頁面中提取所有包含「國小」或「實小」的文字
             if len(schools) == 0:
@@ -589,17 +594,19 @@ class SchoolScraper:
         
         return schools
     
-    async def parse_school_data_with_district(self, html: str) -> List[Dict[str, Any]]:
+    async def parse_school_data_with_district(self, html: str, 
+                                             on_school_scraped: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
         """
         解析 HTML 中的學校資料，並從資料中提取鄉鎮資訊
         
         Args:
             html: HTML 內容
+            on_school_scraped: 可選的回調函數，每處理完一間學校時調用
         
         Returns:
             學校資料列表
         """
-        return await self.parse_school_data(html, None)
+        return await self.parse_school_data(html, None, on_school_scraped=on_school_scraped)
     
     async def get_school_detail(self, school_link_element) -> Dict[str, Any]:
         """
@@ -1332,12 +1339,14 @@ class SchoolScraper:
         
         return detail_data
     
-    async def parse_school_data_with_details(self, district: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def parse_school_data_with_details(self, district: Optional[str] = None, 
+                                            on_school_scraped: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
         """
         解析搜尋結果並取得每個學校的詳細資料
         
         Args:
             district: 鄉鎮市區名稱
+            on_school_scraped: 可選的回調函數，每處理完一間學校時調用，參數為學校資料字典
         
         Returns:
             包含詳細資料的學校資料列表
@@ -1350,6 +1359,7 @@ class SchoolScraper:
         
         try:
             # 先嘗試從搜尋結果頁面直接提取資料（改進的解析方法）
+            # 注意：這裡不傳入 callback，因為可能需要後續獲取詳細資料再觸發 callback
             print("嘗試從搜尋結果頁面直接提取資料...")
             html = await self.page.content()
             schools = await self.parse_school_data(html, district)
@@ -1362,6 +1372,13 @@ class SchoolScraper:
             
             if has_details:
                 print(f"成功從搜尋結果頁面提取到 {len(schools)} 筆包含詳細資料的學校資料")
+                # 資料已完整，觸發 callback
+                if on_school_scraped and callable(on_school_scraped):
+                    for school in schools:
+                        try:
+                            on_school_scraped(school)
+                        except Exception as e:
+                            print(f"  回調函數執行錯誤: {str(e)}")
                 return schools
             
             # 如果搜尋結果頁面沒有詳細資料，嘗試點擊進入詳細頁面
@@ -1474,12 +1491,21 @@ class SchoolScraper:
             # 如果找不到可點擊的連結，返回基本資料
             if not school_elements:
                 print("未找到可點擊的學校連結，返回基本資料...")
+                # 由於前面 parse_school_data 沒有傳入 callback，這裡需要觸發 callback
+                if on_school_scraped and callable(on_school_scraped):
+                    for school in schools:
+                        try:
+                            on_school_scraped(school)
+                        except Exception as e:
+                            print(f"  回調函數執行錯誤: {str(e)}")
                 return schools
             
             print(f"找到 {len(school_elements)} 個學校連結，開始取得詳細資料...")
             
             # 去重（避免同一個學校被重複處理）
             unique_schools = {}
+            # 追蹤已觸發 callback 的學校名稱，用於 Bug 修復
+            processed_school_names = set()
             for elem in school_elements:
                 try:
                     school_name = await elem.text_content()
@@ -1603,6 +1629,14 @@ class SchoolScraper:
                     if not existing_school:
                         schools.append(school_data)
                     
+                    # 調用回調函數（如果提供），立即儲存並釋放記憶體
+                    if on_school_scraped and callable(on_school_scraped):
+                        try:
+                            on_school_scraped(school_data)
+                            processed_school_names.add(school_name)
+                        except Exception as e:
+                            print(f"  回調函數執行錯誤: {str(e)}")
+                    
                     print(f"  完成處理: {school_name}")
                     
                     # 在處理下一個學校前，等待一下並確保頁面狀態正確
@@ -1649,6 +1683,19 @@ class SchoolScraper:
             
             print(f"\n所有學校處理完成！共處理 {len(unique_schools)} 個學校，成功取得 {len([s for s in schools if any([s.get('班級數'), s.get('學生數'), s.get('教師數')])])} 個學校的詳細資料")
             
+            # Bug 修復：確保 schools 中所有學校都觸發 callback
+            # 處理那些在 schools 中但不在 unique_schools 中的學校（沒有對應可點擊元素的學校）
+            if on_school_scraped and callable(on_school_scraped):
+                for school in schools:
+                    school_name = school.get('學校名稱', '')
+                    if school_name and school_name not in processed_school_names:
+                        try:
+                            print(f"  補觸發 callback: {school_name}")
+                            on_school_scraped(school)
+                            processed_school_names.add(school_name)
+                        except Exception as e:
+                            print(f"  回調函數執行錯誤: {str(e)}")
+            
         except Exception as e:
             print(f"解析學校資料時發生錯誤: {str(e)}")
             import traceback
@@ -1656,13 +1703,15 @@ class SchoolScraper:
         
         return schools
     
-    async def parse_school_data(self, html: str, district: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def parse_school_data(self, html: str, district: Optional[str] = None,
+                                on_school_scraped: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
         """
         解析 HTML 中的學校資料
         
         Args:
             html: HTML 內容
             district: 鄉鎮市區名稱
+            on_school_scraped: 可選的回調函數，每處理完一間學校時調用
         
         Returns:
             學校資料列表
@@ -1708,6 +1757,14 @@ class SchoolScraper:
                     '校舍面積': None,
                 }
                 schools.append(school_data)
+            
+            # 如果提供了回調，對所有學校調用回調
+            if schools and on_school_scraped and callable(on_school_scraped):
+                for school in schools:
+                    try:
+                        on_school_scraped(school)
+                    except Exception as e:
+                        print(f"  回調函數執行錯誤: {str(e)}")
             
             if schools:
                 return schools
@@ -1897,6 +1954,14 @@ class SchoolScraper:
             print("警告：未找到資料表格，嘗試其他方法...")
             # 可以嘗試從 div 或其他元素提取資料
         
+        # 如果提供了回調，對所有學校調用回調
+        if schools and on_school_scraped and callable(on_school_scraped):
+            for school in schools:
+                try:
+                    on_school_scraped(school)
+                except Exception as e:
+                    print(f"  回調函數執行錯誤: {str(e)}")
+        
         return schools
     
     def clean_text(self, text: str) -> str:
@@ -2020,12 +2085,15 @@ class SchoolScraper:
         
         return list(merged_schools.values())
     
-    async def get_all_schools(self) -> List[Dict[str, Any]]:
+    async def get_all_schools(self, on_school_scraped: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
         """
         取得花蓮縣所有鄉鎮市區的國小資料
         
+        Args:
+            on_school_scraped: 可選的回調函數，每處理完一間學校時調用，參數為學校資料字典
+        
         Returns:
-            所有學校的資料列表
+            所有學校的資料列表（如果使用回調，可能返回空列表或部分資料）
         """
         all_schools = []
         
@@ -2036,16 +2104,37 @@ class SchoolScraper:
             '富里鄉', '卓溪鄉', '萬榮鄉'
         ]
         
+        # Bug 修復：追蹤 callback 被調用的次數，用於判斷是否成功處理了學校
+        callback_count = 0
+        
+        def wrapped_callback(school_data: Dict[str, Any]) -> None:
+            """包裝 callback 以追蹤調用次數"""
+            nonlocal callback_count
+            callback_count += 1
+            if on_school_scraped:
+                on_school_scraped(school_data)
+        
+        # 使用包裝後的 callback（僅在提供原始 callback 時使用）
+        effective_callback = wrapped_callback if on_school_scraped else None
+        
         try:
             # 使用上下文管理器確保瀏覽器正確關閉
             async with self:
                 # 先嘗試查詢整個花蓮縣（更快速）
                 print("嘗試查詢整個花蓮縣...")
                 try:
-                    county_schools = await self.query_all_schools_in_county('花蓮縣')
-                    if county_schools and len(county_schools) > 0:
+                    county_schools = await self.query_all_schools_in_county('花蓮縣', on_school_scraped=effective_callback)
+                    
+                    # Bug 修復：當使用 callback 模式時，根據 callback 調用次數判斷成功與否
+                    # 而不是僅根據返回列表的大小
+                    if on_school_scraped and callback_count > 0:
+                        # callback 模式且有學校被處理，視為成功
+                        print(f"成功查詢整個花蓮縣，透過 callback 處理了 {callback_count} 筆資料")
+                    elif county_schools and len(county_schools) > 0:
                         print(f"成功查詢整個花蓮縣，取得 {len(county_schools)} 筆資料")
-                        all_schools.extend(county_schools)
+                        # 如果使用回調，資料已經在回調中處理，這裡只保留列表用於返回
+                        if not on_school_scraped:
+                            all_schools.extend(county_schools)
                     else:
                         raise Exception("查詢整個縣市未取得資料，改用逐一查詢")
                 except Exception as e:
@@ -2081,12 +2170,18 @@ class SchoolScraper:
                     for district in districts:
                         try:
                             print(f"正在查詢 {district}...")
-                            district_schools = await self.query_schools('花蓮縣', district)
+                            district_schools = await self.query_schools('花蓮縣', district, on_school_scraped=effective_callback)
                             if district_schools:
-                                all_schools.extend(district_schools)
+                                # 如果使用回調，資料已經在回調中處理，這裡只保留列表用於返回
+                                if not on_school_scraped:
+                                    all_schools.extend(district_schools)
                                 print(f"  {district}: 取得 {len(district_schools)} 筆資料")
                             else:
-                                print(f"  {district}: 未取得資料")
+                                # Bug 修復：在 callback 模式下，即使返回空列表也可能已處理了資料
+                                if on_school_scraped and callback_count > 0:
+                                    print(f"  {district}: 已透過 callback 處理資料")
+                                else:
+                                    print(f"  {district}: 未取得資料")
                         except Exception as e:
                             error_msg = str(e)
                             if 'ERR_NAME_NOT_RESOLVED' in error_msg or 'net::' in error_msg:
@@ -2100,20 +2195,30 @@ class SchoolScraper:
             import traceback
             traceback.print_exc()
         
-        # 合併重複的學校資料
-        print(f"合併前共有 {len(all_schools)} 筆學校資料")
-        all_schools = self.merge_school_data(all_schools)
-        print(f"合併後共有 {len(all_schools)} 筆學校資料")
+        # 如果使用回調，資料已經在回調中處理，不需要合併
+        # 如果沒有使用回調，才需要合併重複的學校資料
+        if not on_school_scraped:
+            # 合併重複的學校資料
+            print(f"合併前共有 {len(all_schools)} 筆學校資料")
+            all_schools = self.merge_school_data(all_schools)
+            print(f"合併後共有 {len(all_schools)} 筆學校資料")
+        else:
+            # 使用回調時，返回空列表（資料已經在回調中處理）
+            print(f"使用回調模式，共處理 {callback_count} 筆資料，已即時儲存")
+            all_schools = []
         
         return all_schools
 
 
-async def scrape_schools() -> List[Dict[str, Any]]:
+async def scrape_schools(on_school_scraped: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
     """
     爬取花蓮縣所有鄉鎮市區的國小資料（非同步版本）
     
+    Args:
+        on_school_scraped: 可選的回調函數，每處理完一間學校時調用，參數為學校資料字典
+    
     Returns:
-        學校資料列表
+        學校資料列表（如果使用回調，返回空列表）
     """
     scraper = SchoolScraper()
-    return await scraper.get_all_schools()
+    return await scraper.get_all_schools(on_school_scraped=on_school_scraped)

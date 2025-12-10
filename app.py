@@ -37,18 +37,37 @@ scheduler = BackgroundScheduler()
 def run_scrape_task():
     """
     執行爬取任務（在背景執行）
+    使用回調函數即時儲存，避免記憶體累積
     """
     print(f"[{datetime.now()}] 開始執行定時爬取任務...")
+    
+    # 用於追蹤已儲存的學校數量和鄉鎮市區
+    saved_count = 0
+    districts_set = set()
+    
+    def save_callback(school_data):
+        """回調函數：每處理完一間學校就立即儲存"""
+        nonlocal saved_count, districts_set
+        try:
+            # 立即儲存到資料庫
+            success = db.save_school(school_data)
+            if success:
+                saved_count += 1
+                district = school_data.get('鄉鎮市區', '')
+                if district:
+                    districts_set.add(district)
+                print(f"  [{saved_count}] 已儲存: {school_data.get('學校名稱', '未知')} ({district})")
+            else:
+                print(f"  警告：儲存失敗: {school_data.get('學校名稱', '未知')}")
+        except Exception as e:
+            print(f"  回調函數錯誤: {str(e)}")
+    
     try:
-        # 執行爬取
-        schools = asyncio.run(scrape_schools())
-        
-        # 儲存到資料庫
-        saved_count = db.save_schools(schools)
+        # 執行爬取，使用回調函數即時儲存
+        schools = asyncio.run(scrape_schools(on_school_scraped=save_callback))
         
         # 取得鄉鎮市區數量
-        districts = set(school.get('鄉鎮市區', '') for school in schools)
-        districts_count = len([d for d in districts if d])
+        districts_count = len(districts_set)
         
         # 記錄爬取日誌
         db.log_scrape(saved_count, districts_count, 'success')
@@ -59,8 +78,8 @@ def run_scrape_task():
         print(f"[{datetime.now()}] 爬取任務失敗: {error_msg}")
         import traceback
         traceback.print_exc()
-        # 記錄錯誤
-        db.log_scrape(0, 0, 'error', error_msg)
+        # 記錄錯誤（但保留已儲存的資料數量）
+        db.log_scrape(saved_count, len(districts_set), 'error', error_msg)
 
 
 def schedule_next_scrape():

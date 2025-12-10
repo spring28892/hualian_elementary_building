@@ -120,6 +120,48 @@ class Database:
         conn.close()
         return saved_count
     
+    def save_school(self, school: Dict[str, Any]) -> bool:
+        """
+        單筆儲存學校資料到資料庫（用於增量儲存）
+        
+        Args:
+            school: 學校資料字典
+        
+        Returns:
+            True 如果成功儲存，False 如果發生錯誤
+        """
+        if not school:
+            return False
+        
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        current_time = datetime.now().isoformat()
+        
+        try:
+            cursor.execute('''
+                INSERT OR REPLACE INTO schools 
+                (鄉鎮市區, 學校名稱, 班級數, 學生數, 教師數, 校地面積, 校舍面積, 學校類型, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                school.get('鄉鎮市區', ''),
+                school.get('學校名稱', ''),
+                school.get('班級數'),
+                school.get('學生數'),
+                school.get('教師數'),
+                school.get('校地面積'),
+                school.get('校舍面積'),
+                school.get('學校類型'),
+                current_time
+            ))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"儲存學校資料時發生錯誤: {school.get('學校名稱', '未知')} - {str(e)}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    
     def get_all_schools(self, districts: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         從資料庫取得所有學校資料
