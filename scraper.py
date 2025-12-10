@@ -2,11 +2,14 @@
 花蓮縣國小資料爬蟲模組
 從教育部統計處網站爬取花蓮縣所有鄉鎮市區的學校統計資料
 使用 Playwright 處理 JavaScript 動態載入內容
+
+記憶體優化：每處理完一個學校就立即儲存並釋放記憶體
 """
 from playwright.async_api import async_playwright, Browser, Page
 from bs4 import BeautifulSoup
 import re
 import asyncio
+import gc
 from typing import List, Dict, Optional, Any, Callable
 
 
@@ -1043,6 +1046,11 @@ class SchoolScraper:
             else:
                 print(f"    警告：最終未解析到任何詳細資料")
             
+            # 【記憶體優化】清理 BeautifulSoup 物件和 HTML 字串
+            del detail_soup
+            del detail_html
+            del detail_text
+            
             # 如果是新分頁，關閉它；如果是同一頁面，返回原頁面
             if detail_page and detail_page != self.page:
                 # 是新分頁，關閉它
@@ -1305,6 +1313,14 @@ class SchoolScraper:
             else:
                 print(f"    警告：最終未解析到任何詳細資料")
             
+            # 【記憶體優化】清理 BeautifulSoup 物件和 HTML 字串
+            try:
+                del detail_soup
+                del detail_html
+                del detail_text
+            except:
+                pass
+            
             # 關閉詳細頁面（如果是新分頁）
             if detail_page != self.page:
                 print(f"    關閉詳細資料視窗...")
@@ -1551,9 +1567,14 @@ class SchoolScraper:
                     
                     # 先檢查是否已經在基本資料中
                     existing_school = None
-                    for school in schools:
+                    existing_school_idx = None
+                    for idx, school in enumerate(schools):
+                        # 【Bug 修復】跳過 None 值（回調模式下已處理並釋放的學校資料）
+                        if school is None:
+                            continue
                         if school.get('學校名稱') == school_name:
                             existing_school = school
+                            existing_school_idx = idx
                             break
                     
                     if existing_school:
@@ -1620,24 +1641,45 @@ class SchoolScraper:
                                 print(f"  ✓ 成功取得詳細資料: {len(success_fields)} 個欄位 ({', '.join(success_fields)})")
                             else:
                                 print(f"  ⚠ 未取得任何詳細資料")
+                            
+                            # 立即清理 detail_data 釋放記憶體
+                            del detail_data
                         except Exception as e:
                             print(f"  ✗ 取得詳細資料失敗: {str(e)}")
                             import traceback
                             traceback.print_exc()
-                    
-                    # 如果不在列表中，加入列表
-                    if not existing_school:
-                        schools.append(school_data)
                     
                     # 調用回調函數（如果提供），立即儲存並釋放記憶體
                     if on_school_scraped and callable(on_school_scraped):
                         try:
                             on_school_scraped(school_data)
                             processed_school_names.add(school_name)
+                            
+                            # 【記憶體優化】回調模式下，立即從列表中移除已處理的學校資料
+                            # 這樣可以避免記憶體累積
+                            if existing_school and existing_school_idx is not None:
+                                # 如果是已存在的學校，從列表中移除
+                                try:
+                                    schools[existing_school_idx] = None  # 先設為 None，稍後清理
+                                except:
+                                    pass
+                            
+                            # 立即清理 school_data 釋放記憶體
+                            del school_data
+                            
                         except Exception as e:
                             print(f"  回調函數執行錯誤: {str(e)}")
+                    else:
+                        # 非回調模式：如果不在列表中，加入列表
+                        if not existing_school:
+                            schools.append(school_data)
                     
                     print(f"  完成處理: {school_name}")
+                    
+                    # 【記憶體優化】每處理 5 個學校，強制進行垃圾回收
+                    if i % 5 == 0:
+                        gc.collect()
+                        print(f"  [記憶體優化] 已執行垃圾回收 ({i}/{len(unique_schools)})")
                     
                     # 在處理下一個學校前，等待一下並確保頁面狀態正確
                     await self.page.wait_for_timeout(1500)
@@ -1681,12 +1723,19 @@ class SchoolScraper:
                         pass
                     continue
             
-            print(f"\n所有學校處理完成！共處理 {len(unique_schools)} 個學校，成功取得 {len([s for s in schools if any([s.get('班級數'), s.get('學生數'), s.get('教師數')])])} 個學校的詳細資料")
+            # 【記憶體優化】回調模式下，清理 schools 列表中的 None 值
+            if on_school_scraped and callable(on_school_scraped):
+                # 過濾掉 None 值（已處理並釋放的學校資料）
+                schools = [s for s in schools if s is not None]
+            
+            print(f"\n所有學校處理完成！共處理 {len(unique_schools)} 個學校，成功取得 {len([s for s in schools if s and any([s.get('班級數'), s.get('學生數'), s.get('教師數')])])} 個學校的詳細資料")
             
             # Bug 修復：確保 schools 中所有學校都觸發 callback
             # 處理那些在 schools 中但不在 unique_schools 中的學校（沒有對應可點擊元素的學校）
             if on_school_scraped and callable(on_school_scraped):
                 for school in schools:
+                    if school is None:
+                        continue
                     school_name = school.get('學校名稱', '')
                     if school_name and school_name not in processed_school_names:
                         try:
@@ -1695,6 +1744,10 @@ class SchoolScraper:
                             processed_school_names.add(school_name)
                         except Exception as e:
                             print(f"  回調函數執行錯誤: {str(e)}")
+            
+            # 【記憶體優化】最終垃圾回收
+            gc.collect()
+            print(f"  [記憶體優化] 最終垃圾回收完成")
             
         except Exception as e:
             print(f"解析學校資料時發生錯誤: {str(e)}")
@@ -2206,6 +2259,10 @@ class SchoolScraper:
             # 使用回調時，返回空列表（資料已經在回調中處理）
             print(f"使用回調模式，共處理 {callback_count} 筆資料，已即時儲存")
             all_schools = []
+            
+            # 【記憶體優化】強制垃圾回收
+            gc.collect()
+            print(f"[記憶體優化] 爬取完成，已執行最終垃圾回收")
         
         return all_schools
 

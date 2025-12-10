@@ -2,10 +2,13 @@
 Flask Web 應用程式
 提供花蓮縣國小資料查詢和下載功能
 使用 SQLite 資料庫儲存資料，並使用 APScheduler 定期更新
+
+記憶體優化：每處理完一個學校就立即儲存並釋放記憶體
 """
 from flask import Flask, render_template, jsonify, Response, request
 import pandas as pd
 import io
+import gc
 from datetime import datetime, timedelta
 from scraper import scrape_schools
 from database import Database
@@ -38,6 +41,8 @@ def run_scrape_task():
     """
     執行爬取任務（在背景執行）
     使用回調函數即時儲存，避免記憶體累積
+    
+    記憶體優化：每處理完一個學校就立即儲存到 SQLite 並釋放記憶體
     """
     print(f"[{datetime.now()}] 開始執行定時爬取任務...")
     
@@ -46,7 +51,13 @@ def run_scrape_task():
     districts_set = set()
     
     def save_callback(school_data):
-        """回調函數：每處理完一間學校就立即儲存"""
+        """
+        回調函數：每處理完一間學校就立即儲存
+        
+        記憶體優化策略：
+        1. 立即儲存到 SQLite
+        2. 每 10 筆資料執行一次垃圾回收
+        """
         nonlocal saved_count, districts_set
         try:
             # 立即儲存到資料庫
@@ -57,6 +68,11 @@ def run_scrape_task():
                 if district:
                     districts_set.add(district)
                 print(f"  [{saved_count}] 已儲存: {school_data.get('學校名稱', '未知')} ({district})")
+                
+                # 【記憶體優化】每 10 筆資料執行一次垃圾回收
+                if saved_count % 10 == 0:
+                    gc.collect()
+                    print(f"  [記憶體優化] 已執行垃圾回收 (已儲存 {saved_count} 筆)")
             else:
                 print(f"  警告：儲存失敗: {school_data.get('學校名稱', '未知')}")
         except Exception as e:
@@ -73,6 +89,11 @@ def run_scrape_task():
         db.log_scrape(saved_count, districts_count, 'success')
         
         print(f"[{datetime.now()}] 爬取任務完成：儲存 {saved_count} 筆學校資料，涵蓋 {districts_count} 個鄉鎮市區")
+        
+        # 【記憶體優化】爬取完成後進行最終垃圾回收
+        gc.collect()
+        print(f"[{datetime.now()}] [記憶體優化] 最終垃圾回收完成")
+        
     except Exception as e:
         error_msg = str(e)
         print(f"[{datetime.now()}] 爬取任務失敗: {error_msg}")
@@ -80,6 +101,9 @@ def run_scrape_task():
         traceback.print_exc()
         # 記錄錯誤（但保留已儲存的資料數量）
         db.log_scrape(saved_count, len(districts_set), 'error', error_msg)
+        
+        # 【記憶體優化】即使發生錯誤也要進行垃圾回收
+        gc.collect()
 
 
 def schedule_next_scrape():
