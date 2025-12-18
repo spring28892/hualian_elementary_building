@@ -1522,6 +1522,11 @@ class SchoolScraper:
             unique_schools = {}
             # 追蹤已觸發 callback 的學校名稱，用於 Bug 修復
             processed_school_names = set()
+            district_keywords = [
+                '花蓮市', '新城鄉', '秀林鄉', '吉安鄉', '壽豐鄉',
+                '鳳林鎮', '光復鄉', '豐濱鄉', '瑞穗鄉', '萬榮鄉',
+                '玉里鎮', '卓溪鄉', '富里鄉'
+            ]
             for elem in school_elements:
                 try:
                     school_name = await elem.text_content()
@@ -1551,8 +1556,12 @@ class SchoolScraper:
                                 pass
                         
                         # 只保留有效的學校名稱（至少包含「國小」或「實小」）
-                        if ('國小' in school_name or '實小' in school_name) and school_name not in unique_schools:
-                            unique_schools[school_name] = elem
+                        normalized_name = self.normalize_school_name(school_name) or school_name
+                        if ('國小' in school_name or '實小' in school_name) and normalized_name not in unique_schools:
+                            unique_schools[normalized_name] = {
+                                'display_name': school_name,
+                                'element': elem
+                            }
                 except Exception as e:
                     print(f"  提取學校名稱時發生錯誤: {e}")
                     continue
@@ -1561,8 +1570,10 @@ class SchoolScraper:
             print(f"開始逐一處理學校詳細資料...\n")
             
             # 為每個學校取得詳細資料
-            for i, (school_name, elem) in enumerate(unique_schools.items(), 1):
+            for i, (normalized_name, school_info) in enumerate(unique_schools.items(), 1):
                 try:
+                    school_name = school_info['display_name']
+                    elem = school_info['element']
                     print(f"正在處理 ({i}/{len(unique_schools)}): {school_name}")
                     
                     # 先檢查是否已經在基本資料中
@@ -1572,24 +1583,32 @@ class SchoolScraper:
                         # 【Bug 修復】跳過 None 值（回調模式下已處理並釋放的學校資料）
                         if school is None:
                             continue
-                        if school.get('學校名稱') == school_name:
+                        existing_norm = self.normalize_school_name(school.get('學校名稱', ''))
+                        if existing_norm == normalized_name:
                             existing_school = school
                             existing_school_idx = idx
                             break
                     
                     if existing_school:
+                        if not existing_school.get('鄉鎮市區') or existing_school.get('鄉鎮市區') == '未知':
+                            resolved = district or self.extract_district_from_name(school_name, district_keywords)
+                            if resolved:
+                                existing_school['鄉鎮市區'] = resolved
                         school_data = existing_school
                     else:
                         # 取得基本資料
+                        resolved_district = district or self.extract_district_from_name(school_name, district_keywords) or '未知'
                         school_data = {
-                            '鄉鎮市區': district or '未知',
-                            '學校名稱': school_name,
+                            '鄉鎮市區': resolved_district,
+                            '學校名稱': normalized_name,
                             '班級數': None,
                             '學生數': None,
                             '教師數': None,
                             '校地面積': None,
                             '校舍面積': None,
                         }
+                    # 確保學校名稱統一使用標準化名稱，避免重複
+                    school_data['學校名稱'] = normalized_name
                     
                     # 如果還沒有詳細資料，點擊取得
                     if not (school_data.get('班級數') or school_data.get('學生數') or school_data.get('教師數')):
@@ -1653,7 +1672,7 @@ class SchoolScraper:
                     if on_school_scraped and callable(on_school_scraped):
                         try:
                             on_school_scraped(school_data)
-                            processed_school_names.add(school_name)
+                            processed_school_names.add(normalized_name)
                             
                             # 【記憶體優化】回調模式下，立即從列表中移除已處理的學校資料
                             # 這樣可以避免記憶體累積
@@ -1737,11 +1756,12 @@ class SchoolScraper:
                     if school is None:
                         continue
                     school_name = school.get('學校名稱', '')
-                    if school_name and school_name not in processed_school_names:
+                    norm_name = self.normalize_school_name(school_name)
+                    if norm_name and norm_name not in processed_school_names:
                         try:
                             print(f"  補觸發 callback: {school_name}")
                             on_school_scraped(school)
-                            processed_school_names.add(school_name)
+                            processed_school_names.add(norm_name)
                         except Exception as e:
                             print(f"  回調函數執行錯誤: {str(e)}")
             
@@ -2062,6 +2082,29 @@ class SchoolScraper:
         
         # 如果沒有匹配，返回原始名稱（可能已經是核心名稱）
         return school_name.strip()
+
+    def extract_district_from_name(self, school_name: str, district_keywords: Optional[List[str]] = None) -> Optional[str]:
+        """
+        從學校名稱中推測鄉鎮市區。
+        先比對既有的區域清單，再用正則抓取「花蓮縣XXX市/區/鄉/鎮」。
+        """
+        if not school_name:
+            return None
+        
+        keywords = district_keywords or [
+            '花蓮市', '新城鄉', '秀林鄉', '吉安鄉', '壽豐鄉',
+            '鳳林鎮', '光復鄉', '豐濱鄉', '瑞穗鄉', '萬榮鄉',
+            '玉里鎮', '卓溪鄉', '富里鄉'
+        ]
+        for name in keywords:
+            if name in school_name:
+                return name
+        
+        match = re.search(r'花蓮縣([\u4e00-\u9fa5]{2,4}[市區鄉鎮])', school_name)
+        if match:
+            return match.group(1)
+        
+        return None
     
     def merge_school_data(self, schools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
