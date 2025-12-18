@@ -259,14 +259,22 @@ def download_csv():
         df.to_csv(output, index=False, encoding='utf-8-sig')  # 使用 utf-8-sig 以支援 Excel
         output.seek(0)
         
-        # 建立檔案名稱
-        filename = f'花蓮縣國小資料_{datetime.now().strftime("%Y%m%d")}.csv'
+        # 建立檔案名稱（只用 ASCII 作為主檔名，避免 Gunicorn 的 latin-1 編碼限制）
+        date_str = datetime.now().strftime("%Y%m%d")
+        ascii_filename = f'hualien_elementary_{date_str}.csv'
+        unicode_filename = f'花蓮縣國小資料_{date_str}.csv'
+        # RFC 5987：filename* 用 UTF-8，主 filename 保持 ASCII
+        from urllib.parse import quote
+        content_disposition = (
+            f'attachment; filename="{ascii_filename}"; '
+            f"filename*=UTF-8''{quote(unicode_filename)}"
+        )
         
         return Response(
             output.getvalue(),
             mimetype='text/csv; charset=utf-8-sig',
             headers={
-                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Disposition': content_disposition,
                 'Content-Type': 'text/csv; charset=utf-8-sig'
             }
         )
